@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+@layer components {
+  /* High-end glassmorphism aesthetic for all cards and sidebars */
+  .glass-panel {
+    background: rgba(255, 255, 255, 0.02);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.05); /* Base subtle border */
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Sophisticated inner line gradient */
+  .glass-panel::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.01) 100%);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: destination-out;
+    mask-composite: exclude;
+    pointer-events: none;
+    z-index: -1;
+  }
+}

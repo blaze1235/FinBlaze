@@ -1,0 +1,6 @@
+{
+  "name": "Cyber Cafe Management & POS",
+  "description": "High-performance dashboard for computer clubs, tracking real-time computer sessions, accumulators, and bar POS checkout operations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
