@@ -2,6 +2,40 @@ export type PCStatus = "Available" | "Occupied" | "Maintenance";
 
 export type PCType = "Standard" | "VIP" | "Streaming";
 
+export type UserRole = "owner" | "admin";
+
+export interface User {
+  id: string;
+  name: string;
+  role: UserRole;
+  pin: string; // 4-digit PIN
+}
+
+export interface Shift {
+  id: string;
+  operatorId: string;
+  operatorName: string;
+  startTime: string; // ISO
+  endTime?: string;  // ISO — set when shift is closed
+}
+
+export interface ShiftReport {
+  id: string;
+  shiftId: string;
+  operatorId: string;
+  operatorName: string;
+  startTime: string;
+  endTime: string;
+  totalReceipts: number;
+  totalRevenue: number;
+  expectedCash: number;
+  expectedCard: number;
+  expectedClubBalance: number;
+  actualCash: number;
+  cashVariance: number; // actualCash - expectedCash
+  reviewed: boolean;    // set to true when owner marks as reviewed
+}
+
 export interface CartItem {
   id: string;
   name: string;
@@ -48,6 +82,8 @@ export interface HistoricReceipt {
   totalCollected: number;
   paymentMethod: string;
   items: CartItem[];
+  operatorId: string;  // who processed the checkout
+  shiftId: string;     // which shift this belongs to
 }
 
 export type WanStatus = "online" | "offline" | "syncing";

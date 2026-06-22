@@ -121,6 +121,8 @@ export const INITIAL_RECEIPTS: HistoricReceipt[] = [
     paidItemsCost: 10000,
     totalCollected: RATES.Standard * 2 + 24000,
     paymentMethod: "Uzcard/Humo",
+    operatorId: "owner-1",
+    shiftId: "shift-demo",
     items: [
       { id: "p4", name: "Lays Potato Chips", price: 14000, quantity: 1, paidInstant: false, timestamp: "" },
       { id: "p1", name: "Coca-Cola 0.5L",    price: 10000, quantity: 1, paidInstant: false, timestamp: "" },
@@ -139,6 +141,8 @@ export const INITIAL_RECEIPTS: HistoricReceipt[] = [
     paidItemsCost: 0,
     totalCollected: Math.round(RATES.VIP * (70 / 60)) + 28000,
     paymentMethod: "Cash",
+    operatorId: "owner-1",
+    shiftId: "shift-demo",
     items: [
       { id: "p2", name: "Red Bull Energy", price: 28000, quantity: 1, paidInstant: false, timestamp: "" },
     ],

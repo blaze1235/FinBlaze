@@ -5,59 +5,111 @@ import POSSidebar from "./components/POSSidebar";
 import CheckoutModal from "./components/CheckoutModal";
 import InventoryView from "./components/InventoryView";
 import AnalyticsView from "./components/AnalyticsView";
+import LoginScreen from "./components/LoginScreen";
+import ShiftCloseModal from "./components/ShiftCloseModal";
 
-import { PC, Product, HistoricReceipt, CartItem, WanStatus } from "./types";
+import { PC, Product, HistoricReceipt, CartItem, WanStatus, User, Shift, ShiftReport } from "./types";
 import { getInitialPCs, INITIAL_PRODUCTS, INITIAL_RECEIPTS } from "./initialData";
 import { Menu, X, ShoppingCart } from "lucide-react";
 
+function loadFromStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>("dashboard");
+  // ── Auth & Shift ──────────────────────────────────────────────
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [activeShift, setActiveShift]  = useState<Shift | null>(null);
+  const [shifts, setShifts]            = useState<Shift[]>(() => loadFromStorage("finblaze_shifts", []));
+  const [shiftReports, setShiftReports] = useState<ShiftReport[]>(() => loadFromStorage("finblaze_shift_reports", []));
+  const [showShiftClose, setShowShiftClose] = useState(false);
 
-  const [pcs, setPcs] = useState<PC[]>(() => {
-    try {
-      const saved = localStorage.getItem("finblaze_pcs");
-      return saved ? JSON.parse(saved) : getInitialPCs();
-    } catch {
-      return getInitialPCs();
-    }
-  });
-
-  const [products, setProducts] = useState<Product[]>(() => {
-    try {
-      const saved = localStorage.getItem("finblaze_products");
-      return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
-    } catch {
-      return INITIAL_PRODUCTS;
-    }
-  });
-
-  const [receipts, setReceipts] = useState<HistoricReceipt[]>(() => {
-    try {
-      const saved = localStorage.getItem("finblaze_receipts");
-      return saved ? JSON.parse(saved) : INITIAL_RECEIPTS;
-    } catch {
-      return INITIAL_RECEIPTS;
-    }
-  });
-
-  const [selectedPCId, setSelectedPCId] = useState<string | null>(null);
-  const [checkoutPC, setCheckoutPC] = useState<PC | null>(null);
-  const [wanStatus, setWanStatus] = useState<WanStatus>("offline"); // will be "online" when gateway is connected
-  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  // ── Navigation ─────────────────────────────────────────────────
+  const [activeTab, setActiveTab]           = useState<string>("dashboard");
+  const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen]       = useState(false);
   const [isMobileBillingOpen, setIsMobileBillingOpen] = useState(false);
 
-  useEffect(() => { localStorage.setItem("finblaze_pcs",      JSON.stringify(pcs));      }, [pcs]);
-  useEffect(() => { localStorage.setItem("finblaze_products",  JSON.stringify(products));  }, [products]);
-  useEffect(() => { localStorage.setItem("finblaze_receipts",  JSON.stringify(receipts));  }, [receipts]);
+  // ── Data ───────────────────────────────────────────────────────
+  const [pcs, setPcs]         = useState<PC[]>(() => loadFromStorage("finblaze_pcs", getInitialPCs()));
+  const [products, setProducts] = useState<Product[]>(() => loadFromStorage("finblaze_products", INITIAL_PRODUCTS));
+  const [receipts, setReceipts] = useState<HistoricReceipt[]>(() => loadFromStorage("finblaze_receipts", INITIAL_RECEIPTS));
 
+  const [selectedPCId, setSelectedPCId] = useState<string | null>(null);
+  const [checkoutPC, setCheckoutPC]     = useState<PC | null>(null);
+  const [wanStatus] = useState<WanStatus>("offline");
+
+  // ── Persist to localStorage ────────────────────────────────────
+  useEffect(() => { localStorage.setItem("finblaze_pcs",           JSON.stringify(pcs));          }, [pcs]);
+  useEffect(() => { localStorage.setItem("finblaze_products",       JSON.stringify(products));      }, [products]);
+  useEffect(() => { localStorage.setItem("finblaze_receipts",       JSON.stringify(receipts));      }, [receipts]);
+  useEffect(() => { localStorage.setItem("finblaze_shifts",         JSON.stringify(shifts));        }, [shifts]);
+  useEffect(() => { localStorage.setItem("finblaze_shift_reports",  JSON.stringify(shiftReports));  }, [shiftReports]);
+
+  // ── Derived ────────────────────────────────────────────────────
   const currentSelectedPC = pcs.find((pc) => pc.id === selectedPCId) || null;
 
   const unpaidPCCount = pcs.filter(
     (pc) => pc.status === "Occupied" && pc.cart.some((item) => !item.paidInstant)
   ).length;
 
-  // --- Handlers ---
+  const pendingReviewCount = shiftReports.filter((r) => !r.reviewed).length;
 
+  // Receipts visible to the current user
+  const visibleReceipts = currentUser?.role === "admin" && activeShift
+    ? receipts.filter((r) => r.shiftId === activeShift.id)
+    : receipts;
+
+  // Shift receipts (for ShiftCloseModal)
+  const shiftReceipts = activeShift
+    ? receipts.filter((r) => r.shiftId === activeShift.id)
+    : [];
+
+  // ── Auth handlers ──────────────────────────────────────────────
+  const handleLogin = (user: User) => {
+    setCurrentUser(user);
+    if (user.role === "admin") {
+      const shift: Shift = {
+        id: `shift-${Date.now()}`,
+        operatorId: user.id,
+        operatorName: user.name,
+        startTime: new Date().toISOString(),
+      };
+      setActiveShift(shift);
+      setShifts((prev) => [...prev, shift]);
+    }
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setActiveShift(null);
+    setSelectedPCId(null);
+    setCheckoutPC(null);
+  };
+
+  const handleCloseShiftRequest = () => setShowShiftClose(true);
+
+  const handleConfirmShiftClose = (report: ShiftReport) => {
+    setShiftReports((prev) => [...prev, report]);
+    setShifts((prev) =>
+      prev.map((s) => s.id === activeShift?.id ? { ...s, endTime: report.endTime } : s)
+    );
+    setShowShiftClose(false);
+    handleLogout();
+  };
+
+  const handleMarkReportReviewed = (reportId: string) => {
+    setShiftReports((prev) =>
+      prev.map((r) => r.id === reportId ? { ...r, reviewed: true } : r)
+    );
+  };
+
+  // ── PC / session handlers ──────────────────────────────────────
   const handleSelectPC = (pc: PC) => {
     setSelectedPCId(pc.id);
     setIsMobileBillingOpen(true);
@@ -77,79 +129,48 @@ export default function App() {
   const handleAddProductToCart = (pcId: string, productId: string, quantity: number, paidInstant: boolean) => {
     const product = products.find((p) => p.id === productId);
     if (!product) return;
-
-    if (product.stock < quantity) {
-      alert(`Warning: Requested quantity (${quantity}) exceeds current stock (${product.stock}).`);
-    }
-
-    setProducts((prev) =>
-      prev.map((p) => p.id === productId ? { ...p, stock: Math.max(0, p.stock - quantity) } : p)
-    );
-
+    if (product.stock < quantity) alert(`Warning: Requested (${quantity}) exceeds stock (${product.stock}).`);
+    setProducts((prev) => prev.map((p) => p.id === productId ? { ...p, stock: Math.max(0, p.stock - quantity) } : p));
     setPcs((prev) =>
       prev.map((pc) => {
         if (pc.id !== pcId) return pc;
-        const newItem: CartItem = {
-          id: product.id,
-          name: product.name,
-          price: product.price,
-          quantity,
-          paidInstant,
-          timestamp: new Date().toISOString(),
-        };
-        return { ...pc, cart: [...pc.cart, newItem] };
+        const item: CartItem = { id: product.id, name: product.name, price: product.price, quantity, paidInstant, timestamp: new Date().toISOString() };
+        return { ...pc, cart: [...pc.cart, item] };
       })
     );
   };
 
-  const handleRemoveProductFromCart = (pcId: string, cartItemIndex: number) => {
-    const targetPC = pcs.find((pc) => pc.id === pcId);
-    if (!targetPC) return;
-    const item = targetPC.cart[cartItemIndex];
+  const handleRemoveProductFromCart = (pcId: string, idx: number) => {
+    const target = pcs.find((pc) => pc.id === pcId);
+    if (!target) return;
+    const item = target.cart[idx];
     if (!item) return;
-
-    setProducts((prev) =>
-      prev.map((p) => p.id === item.id ? { ...p, stock: p.stock + item.quantity } : p)
-    );
-
+    setProducts((prev) => prev.map((p) => p.id === item.id ? { ...p, stock: p.stock + item.quantity } : p));
     setPcs((prev) =>
       prev.map((pc) => {
         if (pc.id !== pcId) return pc;
-        const nextCart = [...pc.cart];
-        nextCart.splice(cartItemIndex, 1);
-        return { ...pc, cart: nextCart };
+        const cart = [...pc.cart];
+        cart.splice(idx, 1);
+        return { ...pc, cart };
       })
     );
   };
 
-  // LAN control stubs — these will call gateway API in Phase 2
-  const handleLockPC = (pcId: string) => {
-    console.log(`[LAN] LOCK → ${pcs.find(p => p.id === pcId)?.ipAddress}:8888`);
-  };
+  // LAN control stubs — wired to Node.js gateway in Phase 2
+  const handleLockPC   = (pcId: string) => console.log(`[LAN] LOCK → ${pcs.find(p => p.id === pcId)?.ipAddress}:8888`);
+  const handleUnlockPC = (pcId: string) => console.log(`[LAN] UNLOCK → ${pcs.find(p => p.id === pcId)?.ipAddress}:8888`);
+  const handleRebootPC = (pcId: string) => console.log(`[LAN] REBOOT → ${pcs.find(p => p.id === pcId)?.ipAddress}:8888`);
+  const handleSendMsg  = (pcId: string, msg: string) => console.log(`[LAN] MSG → ${pcs.find(p => p.id === pcId)?.ipAddress}: "${msg}"`);
 
-  const handleUnlockPC = (pcId: string) => {
-    console.log(`[LAN] UNLOCK → ${pcs.find(p => p.id === pcId)?.ipAddress}:8888`);
-  };
-
-  const handleRebootPC = (pcId: string) => {
-    console.log(`[LAN] REBOOT → ${pcs.find(p => p.id === pcId)?.ipAddress}:8888`);
-  };
-
-  const handleSendMessageToClient = (pcId: string, message: string) => {
-    console.log(`[LAN] MSG → ${pcs.find(p => p.id === pcId)?.ipAddress}: "${message}"`);
-  };
-
-  const handleTriggerCheckout = () => {
-    if (currentSelectedPC) setCheckoutPC(currentSelectedPC);
-  };
+  const handleTriggerCheckout = () => { if (currentSelectedPC) setCheckoutPC(currentSelectedPC); };
 
   const handleConfirmCheckout = (
     paymentMethod: string,
     rawCosts: { timeCost: number; unpaidItemsCost: number; paidItemsCost: number; totalCollected: number }
   ) => {
-    if (!checkoutPC || !checkoutPC.session) return;
+    if (!checkoutPC || !checkoutPC.session || !currentUser) return;
 
-    const newReceipt: HistoricReceipt = {
+    const receipt: HistoricReceipt = {
       id: `REC-${Math.floor(1000 + Math.random() * 9000)}`,
       pcName: checkoutPC.name,
       user: checkoutPC.session.user,
@@ -162,44 +183,46 @@ export default function App() {
       totalCollected: rawCosts.totalCollected,
       paymentMethod,
       items: checkoutPC.cart,
+      operatorId: currentUser.id,
+      shiftId: activeShift?.id ?? "owner-direct",
     };
 
-    setReceipts((prev) => [newReceipt, ...prev]);
-
-    setPcs((prev) =>
-      prev.map((pc) =>
-        pc.id === checkoutPC.id ? { ...pc, status: "Available", session: undefined, cart: [] } : pc
-      )
-    );
-
+    setReceipts((prev) => [receipt, ...prev]);
+    setPcs((prev) => prev.map((pc) => pc.id === checkoutPC.id ? { ...pc, status: "Available", session: undefined, cart: [] } : pc));
     setCheckoutPC(null);
     setSelectedPCId(null);
     setIsMobileBillingOpen(false);
   };
 
-  const handleUpdateProductPrice = (productId: string, newPrice: number) =>
-    setProducts((prev) => prev.map((p) => p.id === productId ? { ...p, price: newPrice } : p));
-
-  const handleUpdateProductStock = (productId: string, newStock: number) =>
-    setProducts((prev) => prev.map((p) => p.id === productId ? { ...p, stock: newStock } : p));
-
-  const handleAddNewProductGroup = (newProd: Product) =>
-    setProducts((prev) => [newProd, ...prev]);
-
+  const handleUpdateProductPrice = (id: string, price: number) =>
+    setProducts((prev) => prev.map((p) => p.id === id ? { ...p, price } : p));
+  const handleUpdateProductStock = (id: string, stock: number) =>
+    setProducts((prev) => prev.map((p) => p.id === id ? { ...p, stock } : p));
+  const handleAddNewProduct = (prod: Product) => setProducts((prev) => [prod, ...prev]);
   const handleClearReceiptsLog = () => {
-    if (confirm("Clear the shift receipt log? This cannot be undone.")) setReceipts([]);
+    if (confirm("Clear the receipt log? This cannot be undone.")) setReceipts([]);
   };
+
+  // ── Render ─────────────────────────────────────────────────────
+  if (!currentUser) return <LoginScreen onLogin={handleLogin} />;
 
   return (
     <div className="w-screen h-screen overflow-hidden flex bg-black relative font-sans antialiased text-slate-100 selection:bg-white/30 selection:text-white">
 
       {/* Desktop Sidebar */}
-      <div className="hidden lg:block shrink-0 h-full z-10 glass-panel">
+      <div className="hidden lg:block shrink-0 h-full z-10">
         <Sidebar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           unpaidPCCount={unpaidPCCount}
           wanStatus={wanStatus}
+          currentUser={currentUser}
+          activeShift={activeShift}
+          pendingReviewCount={pendingReviewCount}
+          isCollapsed={isSidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+          onLogout={handleLogout}
+          onCloseShift={handleCloseShiftRequest}
         />
       </div>
 
@@ -208,30 +231,21 @@ export default function App() {
         {/* Mobile Header */}
         <header className="lg:hidden flex items-center justify-between px-4 py-3 glass-panel !z-20 h-14 shrink-0">
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setIsMobileNavOpen(true)}
-              className="p-1.5 hover:bg-white/5 rounded-lg text-slate-300 focus:outline-none min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors"
-            >
+            <button onClick={() => setIsMobileNavOpen(true)} className="p-1.5 hover:bg-white/5 rounded-lg text-slate-300 min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
               <Menu className="w-5 h-5" />
             </button>
             <h1 className="font-bold text-xs tracking-wider text-white uppercase font-mono">FinBlaze POS</h1>
           </div>
-
-          <div className="flex items-center gap-2">
-            {currentSelectedPC && activeTab === "dashboard" && (
-              <button
-                onClick={() => setIsMobileBillingOpen(true)}
-                className="bg-white/10 border border-white/20 text-white text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1 min-h-[44px] cursor-pointer hover:bg-white/20 transition-all"
-              >
-                <ShoppingCart className="w-4 h-4" />
-                <span className="font-mono font-bold text-[10px]">BILL ({currentSelectedPC.name})</span>
-              </button>
-            )}
-          </div>
+          {currentSelectedPC && activeTab === "dashboard" && (
+            <button onClick={() => setIsMobileBillingOpen(true)} className="bg-white/10 border border-white/20 text-white text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1 min-h-[44px] cursor-pointer hover:bg-white/20 transition-all">
+              <ShoppingCart className="w-4 h-4" />
+              <span className="font-mono font-bold text-[10px]">BILL ({currentSelectedPC.name})</span>
+            </button>
+          )}
         </header>
 
-        {/* Main Content Area */}
-        <main className="flex-1 overflow-hidden flex min-h-0 bg-transparent">
+        {/* Main Content */}
+        <main className="flex-1 overflow-hidden flex min-h-0">
 
           {activeTab === "dashboard" && (
             <PCGrid
@@ -245,16 +259,20 @@ export default function App() {
           {activeTab === "inventory" && (
             <InventoryView
               products={products}
+              role={currentUser.role}
               onUpdateInventoryPrice={handleUpdateProductPrice}
               onUpdateInventoryStock={handleUpdateProductStock}
-              onAddNewProduct={handleAddNewProductGroup}
+              onAddNewProduct={handleAddNewProduct}
             />
           )}
 
           {activeTab === "financials" && (
             <AnalyticsView
-              receipts={receipts}
+              receipts={visibleReceipts}
+              shiftReports={shiftReports}
+              role={currentUser.role}
               onClearReceiptsLog={handleClearReceiptsLog}
+              onMarkShiftReportReviewed={handleMarkReportReviewed}
             />
           )}
 
@@ -270,7 +288,7 @@ export default function App() {
                 onLockPC={handleLockPC}
                 onUnlockPC={handleUnlockPC}
                 onRebootPC={handleRebootPC}
-                onSendMessageToClient={handleSendMessageToClient}
+                onSendMessageToClient={handleSendMsg}
               />
             </div>
           )}
@@ -284,36 +302,28 @@ export default function App() {
             <div>
               <div className="p-4 border-b border-white/10 flex items-center justify-between">
                 <span className="font-semibold text-xs text-white uppercase tracking-wider font-mono">FinBlaze POS</span>
-                <button
-                  onClick={() => setIsMobileNavOpen(false)}
-                  className="p-1 hover:bg-white/10 rounded text-slate-400 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer transition-colors"
-                >
+                <button onClick={() => setIsMobileNavOpen(false)} className="p-1 hover:bg-white/10 rounded text-slate-400 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer transition-colors">
                   <X className="w-5 h-5" />
                 </button>
               </div>
               <div className="p-4 space-y-2">
                 {(["dashboard", "inventory", "financials"] as const).map((tabId) => {
                   const labels: Record<string, string> = {
-                    dashboard: "Stations Matrix",
+                    dashboard: "Stations",
                     inventory: "Inventory",
-                    financials: "Financials",
+                    financials: currentUser.role === "owner" ? "Financials" : "My Shift",
                   };
                   return (
-                    <button
-                      key={tabId}
-                      onClick={() => { setActiveTab(tabId); setIsMobileNavOpen(false); }}
-                      className={`w-full text-left px-4 py-3 rounded-xl text-xs font-semibold transition-all ${
-                        activeTab === tabId ? "bg-white text-black" : "text-white/60 hover:text-white hover:bg-white/5"
-                      }`}
-                    >
+                    <button key={tabId} onClick={() => { setActiveTab(tabId); setIsMobileNavOpen(false); }}
+                      className={`w-full text-left px-4 py-3 rounded-xl text-xs font-semibold transition-all ${activeTab === tabId ? "bg-white text-black" : "text-white/60 hover:text-white hover:bg-white/5"}`}>
                       {labels[tabId]}
                     </button>
                   );
                 })}
               </div>
             </div>
-            <div className="p-4 border-t border-white/5 bg-white/5 text-[10px] font-mono text-white/50 text-center">
-              Administrator • Main Desk
+            <div className="p-4 border-t border-white/5 text-[10px] font-mono text-white/40 text-center">
+              {currentUser.name} · {currentUser.role}
             </div>
           </div>
           <div className="flex-1" onClick={() => setIsMobileNavOpen(false)} />
@@ -327,14 +337,11 @@ export default function App() {
           <div className="w-full max-w-md h-full glass-panel flex flex-col">
             <div className="p-3 bg-white/5 border-b border-white/10 flex items-center justify-between">
               <span className="font-semibold text-xs text-white uppercase tracking-wider font-mono">Station Console</span>
-              <button
-                onClick={() => setIsMobileBillingOpen(false)}
-                className="p-1 hover:bg-white/10 rounded text-slate-400 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer transition-colors"
-              >
+              <button onClick={() => setIsMobileBillingOpen(false)} className="p-1 hover:bg-white/10 rounded text-slate-400 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer transition-colors">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="flex-1 overflow-hidden relative">
+            <div className="flex-1 overflow-hidden">
               <POSSidebar
                 selectedPC={currentSelectedPC}
                 products={products}
@@ -344,7 +351,7 @@ export default function App() {
                 onLockPC={handleLockPC}
                 onUnlockPC={handleUnlockPC}
                 onRebootPC={handleRebootPC}
-                onSendMessageToClient={handleSendMessageToClient}
+                onSendMessageToClient={handleSendMsg}
               />
             </div>
           </div>
@@ -357,6 +364,17 @@ export default function App() {
           pc={checkoutPC}
           onClose={() => setCheckoutPC(null)}
           onConfirmCheckout={handleConfirmCheckout}
+        />
+      )}
+
+      {/* Shift Close Modal */}
+      {showShiftClose && activeShift && currentUser && (
+        <ShiftCloseModal
+          shift={activeShift}
+          currentUser={currentUser}
+          receipts={shiftReceipts}
+          onConfirm={handleConfirmShiftClose}
+          onCancel={() => setShowShiftClose(false)}
         />
       )}
     </div>

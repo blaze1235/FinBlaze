@@ -1,10 +1,11 @@
 import React, { useState } from "react";
-import { Product } from "../types";
+import { Product, UserRole } from "../types";
 import { formatCurrency } from "../utils";
-import { ShoppingBag, Search, PlusCircle, Trash2, ArrowUpDown, ShieldAlert, BadgePlus } from "lucide-react";
+import { ShoppingBag, Search, PlusCircle, Trash2, ArrowUpDown, ShieldAlert, BadgePlus, Lock } from "lucide-react";
 
 interface InventoryViewProps {
   products: Product[];
+  role: UserRole;
   onUpdateInventoryPrice: (productId: string, newPrice: number) => void;
   onUpdateInventoryStock: (productId: string, newStock: number) => void;
   onAddNewProduct: (newProduct: Product) => void;
@@ -12,10 +13,12 @@ interface InventoryViewProps {
 
 export default function InventoryView({
   products,
+  role,
   onUpdateInventoryPrice,
   onUpdateInventoryStock,
   onAddNewProduct,
 }: InventoryViewProps) {
+  const isOwner = role === "owner";
   const [selectedCategory, setSelectedCategory] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   
@@ -65,8 +68,16 @@ export default function InventoryView({
         <div>
           <h2 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-fuchsia-300 tracking-tight drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]">Bar POS Inventory & Catalog</h2>
           <p className="text-xs text-white/50 mt-1">
-            Configure lounge retail pricing, audit inventory stock balances, and register new consumable nodes.
+            {isOwner
+              ? "Configure pricing, audit stock balances, and register new products."
+              : "Update stock levels and log product restocking. Prices are managed by the owner."}
           </p>
+          {!isOwner && (
+            <div className="flex items-center gap-2 mt-2 text-[10px] font-mono text-amber-400/70">
+              <Lock className="w-3 h-3" />
+              <span>Price editing and adding products requires owner access.</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -141,17 +152,21 @@ export default function InventoryView({
                           </span>
                         </td>
                         <td className="p-4 text-right font-mono">
-                          <div className="inline-flex items-center gap-1">
-                            <input
-                              type="number"
-                              value={item.price}
-                              onChange={(e) => onUpdateInventoryPrice(item.id, Number(e.target.value))}
-                              step={1000}
-                              min={0}
-                              className="w-24 bg-black/40 border border-white/10 text-right rounded-md px-2 py-1 text-fuchsia-400 font-bold focus:outline-none focus:border-fuchsia-500/50 backdrop-blur-md transition-all"
-                            />
-                            <span className="text-[9px] text-white/40">UZS</span>
-                          </div>
+                          {isOwner ? (
+                            <div className="inline-flex items-center gap-1">
+                              <input
+                                type="number"
+                                value={item.price}
+                                onChange={(e) => onUpdateInventoryPrice(item.id, Number(e.target.value))}
+                                step={1000}
+                                min={0}
+                                className="w-24 bg-black/40 border border-white/10 text-right rounded-md px-2 py-1 text-fuchsia-400 font-bold focus:outline-none focus:border-fuchsia-500/50 backdrop-blur-md transition-all"
+                              />
+                              <span className="text-[9px] text-white/40">UZS</span>
+                            </div>
+                          ) : (
+                            <span className="text-fuchsia-400 font-bold font-mono">{formatCurrency(item.price)}</span>
+                          )}
                         </td>
                         <td className="p-4 text-center">
                           <div className="inline-flex items-center gap-2 bg-white/5 rounded-md border border-white/10 p-1">
@@ -207,8 +222,16 @@ export default function InventoryView({
           </div>
         </div>
 
-        {/* Right side: Register New Products node form */}
+        {/* Right side: Register New Products (owner only) / Stock info (admin) */}
         <div className="glass-panel rounded-2xl p-6 space-y-5 shadow-[0_4px_30px_rgba(0,0,0,0.1)] sticky top-6">
+          {!isOwner && (
+            <div className="py-6 text-center">
+              <Lock className="w-6 h-6 text-white/20 mx-auto mb-3" />
+              <p className="text-white/40 text-sm font-medium">Owner Access Only</p>
+              <p className="text-white/20 text-xs mt-1">Adding new products requires owner login.</p>
+            </div>
+          )}
+          {isOwner && (<>
           <div className="flex items-center gap-3">
             <div className="p-2 bg-fuchsia-500/10 text-fuchsia-400 rounded-xl border border-fuchsia-500/30 shadow-[0_0_15px_rgba(217,70,239,0.2)]">
               <BadgePlus className="w-5 h-5" />
@@ -305,6 +328,7 @@ export default function InventoryView({
               Auto-flags items when stock sinks beneath 10 units. Verify distributor schedules in general configuration.
             </p>
           </div>
+          </>)}
         </div>
 
       </div>
