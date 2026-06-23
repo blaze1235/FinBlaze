@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Sidebar from "./components/Sidebar";
 import PCGrid from "./components/PCGrid";
 import POSSidebar from "./components/POSSidebar";
@@ -8,25 +8,15 @@ import AnalyticsView from "./components/AnalyticsView";
 import LoginScreen from "./components/LoginScreen";
 import ShiftCloseModal from "./components/ShiftCloseModal";
 
-import { PC, Product, HistoricReceipt, CartItem, WanStatus, User, Shift, ShiftReport } from "./types";
-import { getInitialPCs, INITIAL_PRODUCTS, INITIAL_RECEIPTS } from "./initialData";
+import { PC, Product, HistoricReceipt, WanStatus, User, Shift, ShiftReport } from "./types";
 import { Menu, X, ShoppingCart } from "lucide-react";
-
-function loadFromStorage<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
+import { api } from "./api";
 
 export default function App() {
   // ── Auth & Shift ──────────────────────────────────────────────
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeShift, setActiveShift]  = useState<Shift | null>(null);
-  const [shifts, setShifts]            = useState<Shift[]>(() => loadFromStorage("finblaze_shifts", []));
-  const [shiftReports, setShiftReports] = useState<ShiftReport[]>(() => loadFromStorage("finblaze_shift_reports", []));
+  const [shiftReports, setShiftReports] = useState<ShiftReport[]>([]);
   const [showShiftClose, setShowShiftClose] = useState(false);
 
   // ── Navigation ─────────────────────────────────────────────────
@@ -36,20 +26,31 @@ export default function App() {
   const [isMobileBillingOpen, setIsMobileBillingOpen] = useState(false);
 
   // ── Data ───────────────────────────────────────────────────────
-  const [pcs, setPcs]         = useState<PC[]>(() => loadFromStorage("finblaze_pcs", getInitialPCs()));
-  const [products, setProducts] = useState<Product[]>(() => loadFromStorage("finblaze_products", INITIAL_PRODUCTS));
-  const [receipts, setReceipts] = useState<HistoricReceipt[]>(() => loadFromStorage("finblaze_receipts", INITIAL_RECEIPTS));
+  const [pcs, setPcs]           = useState<PC[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [receipts, setReceipts] = useState<HistoricReceipt[]>([]);
+  const [wanStatus, setWanStatus] = useState<WanStatus>("offline");
 
   const [selectedPCId, setSelectedPCId] = useState<string | null>(null);
   const [checkoutPC, setCheckoutPC]     = useState<PC | null>(null);
-  const [wanStatus] = useState<WanStatus>("offline");
 
-  // ── Persist to localStorage ────────────────────────────────────
-  useEffect(() => { localStorage.setItem("finblaze_pcs",           JSON.stringify(pcs));          }, [pcs]);
-  useEffect(() => { localStorage.setItem("finblaze_products",       JSON.stringify(products));      }, [products]);
-  useEffect(() => { localStorage.setItem("finblaze_receipts",       JSON.stringify(receipts));      }, [receipts]);
-  useEffect(() => { localStorage.setItem("finblaze_shifts",         JSON.stringify(shifts));        }, [shifts]);
-  useEffect(() => { localStorage.setItem("finblaze_shift_reports",  JSON.stringify(shiftReports));  }, [shiftReports]);
+  // ── Load data from gateway on mount ───────────────────────────
+  useEffect(() => {
+    Promise.all([
+      api.pcs.list(),
+      api.products.list(),
+      api.receipts.list(),
+      api.shiftReports.list(),
+    ])
+      .then(([pcsData, productsData, receiptsData, reportsData]) => {
+        setPcs(pcsData);
+        setProducts(productsData);
+        setReceipts(receiptsData);
+        setShiftReports(reportsData);
+        setWanStatus("online");
+      })
+      .catch(() => setWanStatus("offline"));
+  }, []);
 
   // ── Derived ────────────────────────────────────────────────────
   const currentSelectedPC = pcs.find((pc) => pc.id === selectedPCId) || null;
@@ -60,18 +61,16 @@ export default function App() {
 
   const pendingReviewCount = shiftReports.filter((r) => !r.reviewed).length;
 
-  // Receipts visible to the current user
   const visibleReceipts = currentUser?.role === "admin" && activeShift
     ? receipts.filter((r) => r.shiftId === activeShift.id)
     : receipts;
 
-  // Shift receipts (for ShiftCloseModal)
   const shiftReceipts = activeShift
     ? receipts.filter((r) => r.shiftId === activeShift.id)
     : [];
 
   // ── Auth handlers ──────────────────────────────────────────────
-  const handleLogin = (user: User) => {
+  const handleLogin = async (user: User) => {
     setCurrentUser(user);
     if (user.role === "admin") {
       const shift: Shift = {
@@ -80,8 +79,12 @@ export default function App() {
         operatorName: user.name,
         startTime: new Date().toISOString(),
       };
-      setActiveShift(shift);
-      setShifts((prev) => [...prev, shift]);
+      try {
+        const saved = await api.shifts.open(shift);
+        setActiveShift(saved);
+      } catch {
+        setActiveShift(shift);
+      }
     }
   };
 
@@ -94,19 +97,27 @@ export default function App() {
 
   const handleCloseShiftRequest = () => setShowShiftClose(true);
 
-  const handleConfirmShiftClose = (report: ShiftReport) => {
-    setShiftReports((prev) => [...prev, report]);
-    setShifts((prev) =>
-      prev.map((s) => s.id === activeShift?.id ? { ...s, endTime: report.endTime } : s)
-    );
+  const handleConfirmShiftClose = async (report: ShiftReport) => {
+    try {
+      const [savedReport] = await Promise.all([
+        api.shiftReports.submit(report),
+        activeShift ? api.shifts.close(activeShift.id, report.endTime) : Promise.resolve(),
+      ]);
+      setShiftReports((prev) => [...prev, savedReport]);
+    } catch {
+      setShiftReports((prev) => [...prev, report]);
+    }
     setShowShiftClose(false);
     handleLogout();
   };
 
-  const handleMarkReportReviewed = (reportId: string) => {
-    setShiftReports((prev) =>
-      prev.map((r) => r.id === reportId ? { ...r, reviewed: true } : r)
-    );
+  const handleMarkReportReviewed = async (reportId: string) => {
+    try {
+      const updated = await api.shiftReports.markReviewed(reportId);
+      setShiftReports((prev) => prev.map((r) => r.id === reportId ? updated : r));
+    } catch {
+      setShiftReports((prev) => prev.map((r) => r.id === reportId ? { ...r, reviewed: true } : r));
+    }
   };
 
   // ── PC / session handlers ──────────────────────────────────────
@@ -115,92 +126,113 @@ export default function App() {
     setIsMobileBillingOpen(true);
   };
 
-  const handleStartQuickSession = (pcId: string, username: string) => {
-    setPcs((prev) =>
-      prev.map((pc) =>
-        pc.id === pcId
-          ? { ...pc, status: "Occupied", session: { startTime: new Date().toISOString(), user: username }, cart: [] }
-          : pc
-      )
-    );
-    setSelectedPCId(pcId);
+  const handleStartQuickSession = async (pcId: string, username: string) => {
+    try {
+      const updated = await api.pcs.startSession(pcId, username);
+      setPcs((prev) => prev.map((pc) => pc.id === pcId ? updated : pc));
+      setSelectedPCId(pcId);
+    } catch (err: any) {
+      alert(err.message ?? "Failed to start session");
+    }
   };
 
-  const handleAddProductToCart = (pcId: string, productId: string, quantity: number, paidInstant: boolean) => {
-    const product = products.find((p) => p.id === productId);
-    if (!product) return;
-    if (product.stock < quantity) alert(`Warning: Requested (${quantity}) exceeds stock (${product.stock}).`);
-    setProducts((prev) => prev.map((p) => p.id === productId ? { ...p, stock: Math.max(0, p.stock - quantity) } : p));
-    setPcs((prev) =>
-      prev.map((pc) => {
-        if (pc.id !== pcId) return pc;
-        const item: CartItem = { id: product.id, name: product.name, price: product.price, quantity, paidInstant, timestamp: new Date().toISOString() };
-        return { ...pc, cart: [...pc.cart, item] };
-      })
-    );
+  const handleAddProductToCart = async (pcId: string, productId: string, quantity: number, paidInstant: boolean) => {
+    try {
+      const updated = await api.pcs.addToCart(pcId, productId, quantity, paidInstant);
+      setPcs((prev) => prev.map((pc) => pc.id === pcId ? updated : pc));
+      const prod = await api.products.list();
+      setProducts(prod);
+    } catch (err: any) {
+      alert(err.message ?? "Failed to add item");
+    }
   };
 
-  const handleRemoveProductFromCart = (pcId: string, idx: number) => {
-    const target = pcs.find((pc) => pc.id === pcId);
-    if (!target) return;
-    const item = target.cart[idx];
-    if (!item) return;
-    setProducts((prev) => prev.map((p) => p.id === item.id ? { ...p, stock: p.stock + item.quantity } : p));
-    setPcs((prev) =>
-      prev.map((pc) => {
-        if (pc.id !== pcId) return pc;
-        const cart = [...pc.cart];
-        cart.splice(idx, 1);
-        return { ...pc, cart };
-      })
-    );
+  const handleRemoveProductFromCart = async (pcId: string, idx: number) => {
+    try {
+      const updated = await api.pcs.removeFromCart(pcId, idx);
+      setPcs((prev) => prev.map((pc) => pc.id === pcId ? updated : pc));
+      const prod = await api.products.list();
+      setProducts(prod);
+    } catch (err: any) {
+      alert(err.message ?? "Failed to remove item");
+    }
   };
 
-  // LAN control stubs — wired to Node.js gateway in Phase 2
-  const handleLockPC   = (pcId: string) => console.log(`[LAN] LOCK → ${pcs.find(p => p.id === pcId)?.ipAddress}:8888`);
-  const handleUnlockPC = (pcId: string) => console.log(`[LAN] UNLOCK → ${pcs.find(p => p.id === pcId)?.ipAddress}:8888`);
-  const handleRebootPC = (pcId: string) => console.log(`[LAN] REBOOT → ${pcs.find(p => p.id === pcId)?.ipAddress}:8888`);
-  const handleSendMsg  = (pcId: string, msg: string) => console.log(`[LAN] MSG → ${pcs.find(p => p.id === pcId)?.ipAddress}: "${msg}"`);
+  // LAN control — wired to gateway
+  const handleLockPC   = async (pcId: string) => {
+    try { await api.pcs.lan.lock(pcId); }
+    catch (err: any) { alert(`Lock failed: ${err.message}`); }
+  };
+  const handleUnlockPC = async (pcId: string) => {
+    try { await api.pcs.lan.unlock(pcId); }
+    catch (err: any) { alert(`Unlock failed: ${err.message}`); }
+  };
+  const handleRebootPC = async (pcId: string) => {
+    try { await api.pcs.lan.reboot(pcId); }
+    catch (err: any) { alert(`Reboot failed: ${err.message}`); }
+  };
+  const handleSendMsg = async (pcId: string, msg: string) => {
+    try { await api.pcs.lan.message(pcId, msg); }
+    catch (err: any) { alert(`Message failed: ${err.message}`); }
+  };
 
   const handleTriggerCheckout = () => { if (currentSelectedPC) setCheckoutPC(currentSelectedPC); };
 
-  const handleConfirmCheckout = (
+  const handleConfirmCheckout = async (
     paymentMethod: string,
     rawCosts: { timeCost: number; unpaidItemsCost: number; paidItemsCost: number; totalCollected: number }
   ) => {
     if (!checkoutPC || !checkoutPC.session || !currentUser) return;
 
-    const receipt: HistoricReceipt = {
-      id: `REC-${Math.floor(1000 + Math.random() * 9000)}`,
-      pcName: checkoutPC.name,
-      user: checkoutPC.session.user,
-      startTime: checkoutPC.session.startTime,
-      endTime: new Date().toISOString(),
-      durationMs: Date.now() - new Date(checkoutPC.session.startTime).getTime(),
-      timeCost: rawCosts.timeCost,
-      unpaidItemsCost: rawCosts.unpaidItemsCost,
-      paidItemsCost: rawCosts.paidItemsCost,
-      totalCollected: rawCosts.totalCollected,
-      paymentMethod,
-      items: checkoutPC.cart,
-      operatorId: currentUser.id,
-      shiftId: activeShift?.id ?? "owner-direct",
-    };
+    try {
+      const { receipt, pc } = await api.pcs.checkout(checkoutPC.id, {
+        paymentMethod,
+        ...rawCosts,
+        operatorId: currentUser.id,
+        shiftId: activeShift?.id ?? "owner-direct",
+      });
+      setReceipts((prev) => [receipt, ...prev]);
+      setPcs((prev) => prev.map((p) => p.id === pc.id ? pc : p));
+    } catch (err: any) {
+      alert(err.message ?? "Checkout failed");
+      return;
+    }
 
-    setReceipts((prev) => [receipt, ...prev]);
-    setPcs((prev) => prev.map((pc) => pc.id === checkoutPC.id ? { ...pc, status: "Available", session: undefined, cart: [] } : pc));
     setCheckoutPC(null);
     setSelectedPCId(null);
     setIsMobileBillingOpen(false);
   };
 
-  const handleUpdateProductPrice = (id: string, price: number) =>
-    setProducts((prev) => prev.map((p) => p.id === id ? { ...p, price } : p));
-  const handleUpdateProductStock = (id: string, stock: number) =>
-    setProducts((prev) => prev.map((p) => p.id === id ? { ...p, stock } : p));
-  const handleAddNewProduct = (prod: Product) => setProducts((prev) => [prod, ...prev]);
-  const handleClearReceiptsLog = () => {
-    if (confirm("Clear the receipt log? This cannot be undone.")) setReceipts([]);
+  // ── Inventory handlers ─────────────────────────────────────────
+  const handleUpdateProductPrice = async (id: string, price: number) => {
+    try {
+      const updated = await api.products.update(id, { price });
+      setProducts((prev) => prev.map((p) => p.id === id ? updated : p));
+    } catch {}
+  };
+
+  const handleUpdateProductStock = async (id: string, stock: number) => {
+    try {
+      const updated = await api.products.update(id, { stock });
+      setProducts((prev) => prev.map((p) => p.id === id ? updated : p));
+    } catch {}
+  };
+
+  const handleAddNewProduct = async (prod: Product) => {
+    try {
+      const saved = await api.products.add(prod);
+      setProducts((prev) => [saved, ...prev]);
+    } catch (err: any) {
+      alert(err.message ?? "Failed to add product");
+    }
+  };
+
+  const handleClearReceiptsLog = async () => {
+    if (!confirm("Clear the receipt log? This cannot be undone.")) return;
+    try {
+      await api.receipts.clearAll();
+      setReceipts([]);
+    } catch {}
   };
 
   // ── Render ─────────────────────────────────────────────────────
